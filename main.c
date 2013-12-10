@@ -18,7 +18,7 @@
 //Veriables 
 static struct bcp_conn bcp;
  static rimeaddr_t addr;
-  clock_time_t time = (CLOCK_SECOND * 10)/(1*2*2*2);
+  clock_time_t time_ee = (CLOCK_SECOND * 10)/(1);
   clock_time_t Monitoringtime = CLOCK_SECOND * 10;
   uint16_t avgQueueLength = 0;
  // Timer for triggering a send beacon packet task
@@ -48,11 +48,12 @@ static struct bcp_conn bcp;
   
   //Send function
   void sn(void* v){
+      //PRINTF("Sending function\n");
        packetbuf_copyfrom("HI", 2);
        //PRINTF("$$$Generating a new packet, data=%s; counter=%d \n", packetbuf_dataptr(), ++counter );
        bcp_send(&bcp); 
        //Reset the  timer
-       ctimer_set(&send_data_timer, time, sn, NULL);
+       ctimer_set(&send_data_timer, time_ee, sn, NULL);
   }
   
 
@@ -66,7 +67,7 @@ PROCESS_THREAD(main_process, ev, data)
 {
   
   PROCESS_BEGIN();
-  
+    PRINTF("Hi function\n");
   counter_recv = counter = 0; 
   bcp_open(&bcp, 146, &bcp_callbacks);
 
@@ -79,7 +80,7 @@ PROCESS_THREAD(main_process, ev, data)
       PRINTF("size of %d", sizeof(struct bcp_queue_item)*MAX_PACKET_QUEUE_SIZE);
   }else{
       //Set the sending timer
-      ctimer_set(&send_data_timer, time, sn, NULL);
+      ctimer_set(&send_data_timer, time_ee, sn, NULL);
       
   }
   

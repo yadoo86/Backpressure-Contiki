@@ -14,7 +14,7 @@
 #include <stddef.h>  //For offsetof
 #include "lib/list.h"
 
-#define DEBUG 1
+#define DEBUG 0
 #if DEBUG
 #include <stdio.h>
 #define PRINTF(...) printf(__VA_ARGS__)
@@ -230,11 +230,11 @@ static void recv_from_broadcast(struct broadcast_conn *c,
             //Get data
             dm.data_length = packetbuf_datalen();
         
-            //Fix Contiki bug for extra header allocation
+            //Fix Contiki bug for extra header allocation   
             char * t = packetbuf_dataptr() + sizeof(struct bcp_packet_header);
             
             memcpy(&dm.data, t, dm.data_length);
-         
+            
             //Clean the bugy packetbuf
             prepare_packetbuf();
             packetbuf_set_datalen(dm.data_length);
@@ -269,8 +269,11 @@ static void recv_from_broadcast(struct broadcast_conn *c,
                //Notify end user callbacks
                //We need to rebuild packetbuf since we called send_ack
                prepare_packetbuf();
+               
                memcpy(packetbuf_dataptr(), &dm.data, dm.data_length);
-
+               
+               
+               
                //Notify user callback
                if(bc->cb->recv != NULL)
                   bc->cb->recv(bc, &dm.hdr.origin);
@@ -565,18 +568,19 @@ static void send_beacon(void *ptr)
         
         //Copy the data to the packetbuf
         packetbuf_set_datalen(i->data_length);
-        //memcpy(packetbuf_dataptr(),&(i->data), i->data_length);
+        memcpy(packetbuf_dataptr(),&(i->data), i->data_length);
         
         
         c->tx_attempts += 1;
          
-        PRINTF("DEBUG: Sending a data packet to node[%d].[%d] (Origin: [%d][%d]), BC=%d,len=%d \n", 
+        PRINTF("DEBUG: Sending a data packet to node[%d].[%d] (Origin: [%d][%d]), BC=%d,len=%d, data=%s \n", 
                 neighborAddr->u8[0], 
                 neighborAddr->u8[1],
                 i->hdr.origin.u8[0],
                 i->hdr.origin.u8[1],
                 i->hdr.bcp_backpressure,
-                i->data_length);
+                i->data_length,
+                i->data);
         
         //Send the data packet via the broadcast channel
         broadcast_send(&c->broadcast_conn);
@@ -620,7 +624,9 @@ static void send_beacon(void *ptr)
   */
  static void prepare_packetbuf(){
      //PRINTF("DEBUG: Prepare Packetbuf\n");
+     memset(packetbuf_dataptr(), '\0', packetbuf_datalen()+1);
      packetbuf_clear();
+     
  }
  
  /**
