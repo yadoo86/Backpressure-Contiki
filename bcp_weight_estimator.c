@@ -43,7 +43,7 @@ MEMB(routing_table_memb, struct routingtable_item_bcp, MAX_ROUTING_TABLE_SIZE);
 int weight_estimator_getWeight(struct bcp_conn *c, struct routingtable_item * it){
     struct routingtable_item_bcp * i = (struct routingtable_item_bcp *) it;
     int w = 0;
-    uint32_t longPRR;
+    
     
     //Calculate the weight 
     w = (int) bcp_queue_length(&c->packet_queue);

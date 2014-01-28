@@ -55,18 +55,17 @@ struct bcp_queue_item {
   //Linked list
   struct bcp_queue_item *next;
   /**
-   * The header section
-   */
-  struct bcp_packet_header hdr; //Header
-  /**
    * The data section
    */
-  
   char data[MAX_USER_PACKET_SIZE]; //Data
   /**
    * The length of the data section
    */
-  uint16_t data_length; 
+  uint16_t data_length;
+  /**
+   * The header section
+   */
+  struct bcp_packet_header hdr; //Header
 };
 
 /**
@@ -90,16 +89,22 @@ void bcp_queue_init(void *c);
 struct bcp_queue_item * bcp_queue_top(struct bcp_queue *s);
 
 /**
- * 
- * \breif Pushes a new packet to the given packet queue
- * 
+ * \return the queue item for the given index. 
+ */
+struct bcp_queue_item * bcp_queue_element(struct bcp_queue *s, uint16_t index);
+
+/**
+ * \brief Adds the given queue item to the queue
  * \param s the packet queue
+ * \param i the new queue item
  * \return the record representation of the packet after being added to the queue.
  * 
- *        This function adds a new packet to the packet queue. It uses packetbuf API
- *        to obtain the packet data existing in the current packet buffer.
+ *          This function adds the given item to the queue. It uses memory copy API
+ *          to copy the item into a new memory location. Thus, the parameter (i) can
+ *          be local or released safely after calling this function.
  */
-struct bcp_queue_item * bcp_queue_push(struct bcp_queue *s);
+struct bcp_queue_item * bcp_queue_push(struct bcp_queue *s, struct bcp_queue_item *i);
+
 
 /**
  * \breif Removes the first packet from the packet queue

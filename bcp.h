@@ -12,6 +12,7 @@
 #include "bcp-config.h"
 #include "bcp_routing_table.h"
 #include "bcp_queue.h"
+#include "bcp_extend.h"
 #include "bcp_weight_estimator.h"
 
 
@@ -56,6 +57,9 @@ struct bcp_conn {
 
   // End user Callbacks
   const struct bcp_callbacks *cb;
+  
+  //Component Extender - SPI
+  const struct bcp_extender * ce;
 
   //Flag to indicate whether the bcp channel is busy or not
   bool busy;
@@ -102,7 +106,8 @@ struct bcp_conn {
 *
 */
 void bcp_open(struct bcp_conn *c, uint16_t channel,
-              const struct bcp_callbacks *callbacks);
+              const struct bcp_callbacks *callbacks
+              );
 
 /**
 * \brief      Close an opened bcp connection

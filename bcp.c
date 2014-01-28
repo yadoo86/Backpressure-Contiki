@@ -10,11 +10,13 @@
 #include "net/rime/unicast.h"
 #include "net/rime/broadcast.h"
 #include "net/netstack.h"
+#include "bcp_extend.h"
+#include "bcp_queue_allocator.h"
 
 #include <stddef.h>  //For offsetof
 #include "lib/list.h"
 
-#define DEBUG 0
+#define DEBUG 1
 #if DEBUG
 #include <stdio.h>
 #define PRINTF(...) printf(__VA_ARGS__)
@@ -62,23 +64,6 @@ struct beacon_request_msg {
 struct ack_msg {
 };
 
-/**
- * \brief      A structure for user data messages.
- */
-struct data_msg{
-    /**
-     * The header of the data packet. 
-     */
-    struct bcp_packet_header hdr;
-    /**
-     * The length of the data section
-     */
-    uint16_t data_length;
-    /**
-     * The data section. This is where end user data is stored
-     */
-    char data[MAX_USER_PACKET_SIZE];
-};
 
 
 static void send_beacon_request(void *ptr);
@@ -207,62 +192,44 @@ static void recv_from_broadcast(struct broadcast_conn *c,
     }else //If this node is the destination 
         if(rimeaddr_cmp(&destinationAddress, &rimeaddr_node_addr)){
             
-            //Reconstruct data msg
-            struct data_msg dm;
-            //fix Contiki bug in reading header length for incoming data
-            packetbuf_set_datalen(packetbuf_datalen() - sizeof(struct bcp_packet_header));
-            packetbuf_hdralloc(sizeof(struct bcp_packet_header));
-            
-            //Get the header
-            memcpy(&dm.hdr, packetbuf_dataptr(), sizeof(struct bcp_packet_header));
-            
-            PRINTF("DEBUG: Received a forwarded data packet from node[%d].[%d] sent to node[%d].[%d] (Origin: [%d][%d]), BCP=%d, delay=%x",
-                  from->u8[0] ,
-                  from->u8[1], 
+            //Abstract the message
+            struct bcp_queue_item * dm = (struct bcp_queue_item *) packetbuf_dataptr();
+            PRINTF("DEBUG: Received a forwarded data packet sent to node[%d].[%d] (Origin: [%d][%d]), BCP=%d, delay=%x \n",
                   destinationAddress.u8[0], 
                   destinationAddress.u8[1], 
-                  dm.hdr.origin.u8[0],
-                  dm.hdr.origin.u8[1],
-                  dm.hdr.bcp_backpressure,
-                  dm.hdr.delay);   
-            PRINTF(", length=%d\n",packetbuf_datalen());
+                  dm->hdr.origin.u8[0],
+                  dm->hdr.origin.u8[1],
+                  dm->hdr.bcp_backpressure,
+                  dm->hdr.delay);
             
-            //Get data
-            dm.data_length = packetbuf_datalen();
-        
-            //Fix Contiki bug for extra header allocation   
-            char * t = packetbuf_dataptr() + sizeof(struct bcp_packet_header);
-            
-            memcpy(&dm.data, t, dm.data_length);
-            
-            //Clean the bugy packetbuf
-            prepare_packetbuf();
-            packetbuf_set_datalen(dm.data_length);
-            memcpy(packetbuf_dataptr(), &dm.data, dm.data_length);   
-                      
-            //If this node is not sink, then forward this packet to another node
             if(!bc->isSink){
+                //Add this packet to the queue so that we can forward it in the near future
                 struct bcp_queue_item* itm;
-                //struct bcp_packet_header header;
-               itm = push_packet_to_queue(bc);
-               if(itm != NULL){
-                   //itm ->hdr = header;
-                   itm->hdr.origin.u8[0] = dm.hdr.origin.u8[0];
-                   itm->hdr.origin.u8[1] = dm.hdr.origin.u8[1];
-                   itm->hdr.delay = dm.hdr.delay;
-                   itm->hdr.lastProcessTime = clock_time();
-                   
-                   send_ack(bc, from);
-
-                    // Reset the send data timer
+                itm = bcp_queue_push(&bc->packet_queue, dm);
+                 //Notify the extender
+                if(bc->ce != NULL && bc->ce->onReceivingData != NULL)
+                        bc->ce->onReceivingData(bc, itm);
+                if(itm != NULL){
+                     itm->hdr.lastProcessTime = clock_time();
+                    
+                     // Reset the send data timer
                     if(ctimer_expired(&(bc->send_timer))) {
                       clock_time_t time = SEND_TIME_DELAY;
                       ctimer_set(&bc->send_timer, time, send_packet, bc);
                     }
-               }
-            }else{
+                }
+                
+                //Update the routing table
+               routing_table_update_queuelog(&bc->routing_table, from, dm->hdr.bcp_backpressure);
+                
+             }else{
                //If it is Sink
-               PRINTF("DEBUG: Sink Received a new data packet, user will be notified, total delay(ms)=%x\n", dm.hdr.delay*10);
+               PRINTF("DEBUG: Sink Received a new data packet, user will be notified, total delay(ms)=%x\n", dm->hdr.delay);
+               
+               //Save the message
+               struct bcp_queue_item pk;
+               memcpy(&pk, dm, dm->data_length);
+               
                //Send ACK
                send_ack(bc, from);
 
@@ -270,18 +237,20 @@ static void recv_from_broadcast(struct broadcast_conn *c,
                //We need to rebuild packetbuf since we called send_ack
                prepare_packetbuf();
                
-               memcpy(packetbuf_dataptr(), &dm.data, dm.data_length);
-               
-               
-               
+               memcpy(packetbuf_dataptr(), &pk.data, MAX_USER_PACKET_SIZE);
+                        
                //Notify user callback
                if(bc->cb->recv != NULL)
-                  bc->cb->recv(bc, &dm.hdr.origin);
+                  bc->cb->recv(bc, &pk.hdr.origin);
                else 
                   PRINTF("ERROR: BCP cannot notify user as the receive callback function is not set.\n");
+               
+               //Update the routing table
+               routing_table_update_queuelog(&bc->routing_table, from, pk.hdr.bcp_backpressure);
             }
-           //Update the routing table
-           routing_table_update_queuelog(&bc->routing_table, from, dm.hdr.bcp_backpressure);
+
+           
+            
     }else{
         //When the node is not the destination for the data pack. Just abstract 
         //the queue log from the header of the packet
@@ -488,14 +457,24 @@ static void send_beacon(void *ptr)
  * \return The queue item for the packet. If the packet cannot be added to the queue, this function will return NULL.
  */
  struct bcp_queue_item* push_packet_to_queue(struct bcp_conn *c){
-    struct bcp_queue_item * i;
-  
-    i = bcp_queue_push(&c->packet_queue);
 
-    if(i == NULL){
-        return i;
+  
+     struct bcp_queue_item newRow;
+    
+    //Packetbuf should not be empty
+    if(packetbuf_dataptr() == NULL){
+        PRINTF("ERROR: Packetbuf is empty; data cannot be added to the queue\n");
+        return NULL;
     }
-    return i;
+    
+    //Sets the fields of the new record
+    newRow.next = NULL;
+    newRow.hdr.bcp_backpressure = 0;
+    newRow.data_length = packetbuf_datalen();
+    memcpy(newRow.data, packetbuf_dataptr(), newRow.data_length);
+    
+    return bcp_queue_push(&c->packet_queue, &newRow);
+    
     
 }
 
@@ -555,35 +534,42 @@ static void send_beacon(void *ptr)
         //Update the header
         packetbuf_set_addr(PACKETBUF_ADDR_ERECEIVER, neighborAddr); //Set the destination address
        
-        //Allocate space for the BCP header
-        packetbuf_hdralloc(sizeof(struct bcp_packet_header));
-       
-        //Add backpressure meta data to the header
+        //Add backpressure meta data to the header. All these meta data can be overwritten by the extender
         i->hdr.bcp_backpressure = bcp_queue_length(&c->packet_queue); 
         i->hdr.delay = i->hdr.delay + clock_time() - i->hdr.lastProcessTime;
         i->hdr.lastProcessTime = i->hdr.lastProcessTime;
-         
-        //Copy the header to the packetbuf
-        memcpy(packetbuf_hdrptr(), &(i->hdr), sizeof(struct bcp_packet_header)); 
+        i->data_length = sizeof(struct bcp_queue_item);
+        
+        
+        //Notify the extender
+        if(c->ce != NULL && c->ce->beforeSendingData != NULL)
+                        c->ce->beforeSendingData(c, i);
         
         //Copy the data to the packetbuf
         packetbuf_set_datalen(i->data_length);
-        memcpy(packetbuf_dataptr(),&(i->data), i->data_length);
+        memcpy(packetbuf_dataptr(),i, i->data_length);
         
-        
+        //Remove pointers
+        struct bcp_queue_item* pI = packetbuf_dataptr();
+        pI->next = NULL;
+       
         c->tx_attempts += 1;
          
         PRINTF("DEBUG: Sending a data packet to node[%d].[%d] (Origin: [%d][%d]), BC=%d,len=%d, data=%s \n", 
                 neighborAddr->u8[0], 
                 neighborAddr->u8[1],
-                i->hdr.origin.u8[0],
-                i->hdr.origin.u8[1],
-                i->hdr.bcp_backpressure,
-                i->data_length,
-                i->data);
+                pI->hdr.origin.u8[0],
+                pI->hdr.origin.u8[1],
+                pI->hdr.bcp_backpressure,
+                pI->data_length,
+                pI->data);
         
         //Send the data packet via the broadcast channel
         broadcast_send(&c->broadcast_conn);
+        
+        //Notify the extender
+        if(c->ce != NULL && c->ce->afterSendingData != NULL)
+                        c->ce->afterSendingData(c, i);
         
     }
     
@@ -647,15 +633,19 @@ void bcp_open(struct bcp_conn *c, uint16_t channel,
     PRINTF("DEBUG: Opening a bcp connection\n");
     //Set the end user callback function
     c->cb = callbacks;
+    //Set the default extender interface 
+    c->ce = NULL;
     
     // Initialize the lists containing in the BCP object
     LIST_STRUCT_INIT(c, packet_queue_list);
     LIST_STRUCT_INIT(c, routing_table_list);
     
-    // Initialize nested components
+    //Initialize nested components
     routing_table_init(c);
     weight_estimator_init(c);
     bcp_queue_init(c);
+    //Ask queue allocator to allocate memeory for the queue
+    bcp_queue_allocator_init(c);
     
     PRINTF("DEBUG: Open a broadcast connection for the data packets and beacons of the BCP\n");
     broadcast_open(&c->broadcast_conn, channel, &broadcast_callbacks);

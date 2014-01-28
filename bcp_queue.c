@@ -18,23 +18,37 @@
 #endif
 
 
-//Allocate memory for the queue datastr
-MEMB(packet_queue_memb, struct bcp_queue_item, MAX_PACKET_QUEUE_SIZE); 
 
 void bcp_queue_init(void *c){
     //Setup BCP
     struct bcp_conn * bcp_c = (struct bcp_conn *) c;
     bcp_c->packet_queue.list = &(bcp_c->packet_queue_list);
-    bcp_c->packet_queue.memb = &packet_queue_memb;
     bcp_c->packet_queue.bcp_connection = c;
-    //Allocate memeory
-    memb_init(&packet_queue_memb); 
+    
     list_init(bcp_c->packet_queue_list);
-    PRINTF("DEBUG: Bcp Queue has been initialized \n"); 
+    PRINTF("DEBUG: Bcp Queue has been initialized \n");
+    
+    /**
+     * As seen, the actual memory allocation for the queue has to be performed 
+     * separately by another component (the default implementation is BCP_Queue_Allocater. 
+     * This will provide a great flexiablity in terms of extending the queue items and provide a customized header.
+     */
 }
 
 struct bcp_queue_item * bcp_queue_top(struct bcp_queue *s){
     return list_head(*s->list);
+}
+
+struct bcp_queue_item * bcp_queue_element(struct bcp_queue *s, uint16_t index){
+    
+    struct bcp_queue_item * i = bcp_queue_top(s);
+    int j;
+    
+    for(j = 1 ; j < index+1; j++)
+        i = list_item_next(i);
+    
+    return i;
+    
 }
 
 void bcp_queue_remove(struct bcp_queue *s, struct bcp_queue_item *i){
@@ -58,16 +72,8 @@ int bcp_queue_length(struct bcp_queue *s){
     return list_length(*s->list);
 }
 
-
-struct bcp_queue_item * bcp_queue_push(struct bcp_queue *s){
-    
+struct bcp_queue_item * bcp_queue_push(struct bcp_queue *s, struct bcp_queue_item *i){
     struct bcp_queue_item * newRow;
-    
-    //Packetbuf should not be empty
-    if(packetbuf_dataptr() == NULL){
-        PRINTF("ERROR: Packetbuf is empty; data cannot be added to the queue\n");
-        return NULL;
-    }
     
     //Make sure the queue is not full
     uint16_t current_queue_length =  bcp_queue_length(s);
@@ -83,12 +89,14 @@ struct bcp_queue_item * bcp_queue_push(struct bcp_queue *s){
          PRINTF("DEBUG: Error, memory cannot be allocated for a bcp_queue_item record \n");
          return NULL;
      }
-      
+    
+    
     //Sets the fields of the new record
     newRow->next = NULL;
     newRow->hdr.bcp_backpressure = 0;
-    newRow->data_length = packetbuf_datalen();
-    memcpy(newRow->data, packetbuf_dataptr(), newRow->data_length);
+    newRow->data_length = i->data_length;
+    
+    memcpy(newRow->data, i->data, newRow->data_length);
     
     
     //Add the row to the queue
@@ -96,6 +104,7 @@ struct bcp_queue_item * bcp_queue_push(struct bcp_queue *s){
     
     PRINTF("DEBUG: Pushing a new data packet to the packet queue\n");
     return bcp_queue_top(s);
+    
 }
 
 
